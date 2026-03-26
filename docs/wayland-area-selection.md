@@ -186,6 +186,80 @@ zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface,
 // 6. On release, crop and save/copy
 ```
 
+## Multi-Monitor Coordinate Handling
+
+When dealing with monitors of different resolutions and aspect ratios (e.g., FHD 16:10,
+FHD 16:9, WQHD 3440x1440), coordinate mapping is the key challenge.
+
+### Logical vs Physical Coordinates
+
+- Wayland compositors work in **logical coordinates** (what you get from `wl_output`
+  geometry / `xdg-output-manager`)
+- If all monitors run at scale 1, logical = physical pixels
+- If any monitor has fractional scaling (e.g., 1.25x on the ultrawide), the pixel buffer
+  size will differ from the logical size
+
+### Per-Output Layer Surfaces
+
+Layer shell surfaces are **per-output** — you create one surface per monitor, not one
+giant surface spanning all of them. The compositor positions each surface on its
+respective output.
+
+### Practical Approach
+
+1. **Enumerate outputs**: store each output's logical position (`x, y`), logical size,
+   scale factor, and physical resolution
+2. **Screencopy each output**: you get a buffer at physical resolution per output
+3. **Selection coordinates in logical space**: the drag rectangle uses the bounding box
+   across all outputs in logical coordinates
+4. **Render per-output**: each output's overlay renders its own slice of the capture.
+   Dim the full image, then draw the selection rectangle mapped to that output's local
+   coordinates (subtract the output's logical offset)
+5. **Crop**: figure out which outputs intersect the selection and composite the relevant
+   pixels from each output's capture buffer
+
+### Unified Buffer Strategy
+
+Build a unified buffer from the logical layout:
+- Compute bounding box: `(min_x, min_y)` to `(max_x + max_w, max_y + max_h)` across
+  all outputs
+- Allocate a buffer of that size, fill with black
+- Blit each output's capture into its correct offset
+- Gaps between monitors (where no output exists) stay black
+
+The tricky part is when a selection spans two monitors with different pixel densities —
+get it working with uniform scale first, then handle mixed DPI as a refinement.
+
+## Getting Started
+
+### Header
+
+```c
+#include <wayland-client.h>
+```
+
+### Install (Debian/Ubuntu)
+
+```sh
+sudo apt install libwayland-dev
+```
+
+### Link
+
+```sh
+gcc ... -lwayland-client
+```
+
+### Documentation
+
+- **The Wayland Book** (best practical guide, read first): https://wayland-book.com
+  — covers connecting to the display, registry, surfaces, SHM buffers, input handling
+- **Official API reference**: https://wayland.freedesktop.org/docs/html/
+- **Protocol XML files** (the real source of truth): installed at
+  `/usr/share/wayland-protocols/` and browsable at https://wayland.app/protocols/
+- **wlr extension protocols**: https://gitlab.freedesktop.org/wlr/wlr-protocols,
+  browsable at https://wayland.app
+
 ## Sources
 
 - [Wayland Explorer — wlr-layer-shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1)
