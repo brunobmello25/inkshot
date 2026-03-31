@@ -1,0 +1,3 @@
+[submodule "docs/wayland-book"]
+	path = docs/wayland-book
+	url = https://git.sr.ht/~sircmpwn/wayland-book
