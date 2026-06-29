@@ -1,0 +1,23 @@
+{
+    "odin_command": "odin",
+    "checker_args": "-debug -collection:lib=lib",
+    "collections": [
+        {
+            "name": "lib",
+            "path": "lib"
+        }
+    ],
+    "profile": "debug",
+    "profiles": [
+        {
+            "name": "debug",
+            "checker_path": [
+                "src",
+                "lib/odin-wayland"
+            ],
+            "defines": {
+                "ODIN_DEBUG": "true"
+            }
+        }
+    ]
+}
