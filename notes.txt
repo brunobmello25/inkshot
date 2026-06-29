@@ -1,0 +1,57 @@
+Yes, this is very much possible with SDL3, and SDL3 actually has notably better Wayland support than SDL2. Let me break down the feasibility of each piece:
+
+## Capturing the Screen
+
+SDL3 doesn't have a built-in screenshot-all-displays API, but you have two good options:
+
+- **`wlr-screencopy` protocol** (via `zwlr_screencopy_manager_v1`) — works on wlroots-based compositors (Sway, Hyprland, niri, etc.). You'd call this via raw Wayland protocol before initializing SDL, then load the raw pixel data into an `SDL_Texture`.
+- **`xdg-desktop-portal`** (via `org.freedesktop.portal.Screenshot`) — the "proper" Wayland way, works on GNOME, KDE, and others. More portable but may show a permission prompt.
+
+SDL3 itself doesn't abstract this — you'll handle screen capture outside SDL, then hand the pixels in.
+
+## Full-Span Overlay Window
+
+SDL3 supports creating a borderless window positioned and sized to span all displays. You'd:
+
+1. Call `SDL_GetDisplays()` to enumerate displays and get their bounds
+2. Compute the bounding union rectangle of all display geometries
+3. Create a single `SDL_Window` with `SDL_WINDOW_BORDERLESS` covering that union rect
+4. On Wayland, set it as an overlay layer via the **`wlr-layer-shell`** protocol (`zwlr_layer_shell_v1`) so it sits on top of everything — this is the same mechanism flameshot uses
+
+The layer-shell part requires direct Wayland protocol calls (not SDL-abstracted), but SDL3 gives you access to the underlying `wl_surface` via `SDL_GetProperty` on the window, so you can attach the layer-shell role to it.
+
+## Region Selection + Drawing
+
+This is pure SDL3 and very straightforward:
+
+- Render the captured screenshot as a background texture
+- Track mouse drag with `SDL_EVENT_MOUSE_BUTTON_DOWN/UP` and `SDL_EVENT_MOUSE_MOTION` to define the selection rect
+- Draw the selection overlay using `SDL_RenderRect` / `SDL_RenderFillRect` with a semi-transparent color
+- For annotations (arrows, boxes, text, freehand), SDL3's `SDL_RenderLine`, `SDL_RenderRect`, and `SDL_RenderGeometry` cover most of it; for text you'd bring in **SDL_ttf 3.x**
+
+## Cropping and Output
+
+Once the user confirms:
+
+1. You have the selection rect in screen coordinates
+2. Read back pixels with `SDL_RenderReadPixels` from just that region
+3. Encode to PNG via **SDL_image 3.x** (`IMG_SavePNG`) or `stb_image_write` — both work fine
+4. Optionally pipe to clipboard using `SDL_SetClipboardData` with `image/png` mime type — SDL3 supports arbitrary mime types on the clipboard, so this works natively on Wayland
+
+## What You'll Need Outside SDL3
+
+| Need | Solution |
+|---|---|
+| Screen capture | `wlr-screencopy` or `xdg-desktop-portal` |
+| Overlay positioning | `wlr-layer-shell` protocol |
+| Wayland protocol codegen | `wayland-scanner` + protocol XMLs |
+| Text rendering | SDL_ttf 3.x |
+| PNG output | SDL_image 3.x or `stb_image_write` |
+
+## Compositor Compatibility Caveat
+
+The `wlr-layer-shell` + `wlr-screencopy` path works great on **wlroots compositors** (Sway, Hyprland, niri, Wayfire). On **GNOME/Mutter** and **KDE/KWin**, layer-shell support varies (GNOME is notably hostile to it), so if you want broad compatibility you'd also want an `xdg-desktop-portal` fallback path — which is more work but doable.
+
+## Summary
+
+The SDL3 parts (window, rendering, input, clipboard) are all solid. The two places you step outside SDL are screen capture and layer-shell overlay positioning — both require direct Wayland protocol calls, but SDL3 exposes the native handles you need to bridge them. This is exactly the architecture tools like `grim` + `slurp` use under the hood, just unified into one binary with SDL doing the rendering layer.
