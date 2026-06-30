@@ -1,57 +1,129 @@
-Yes, this is very much possible with SDL3, and SDL3 actually has notably better Wayland support than SDL2. Let me break down the feasibility of each piece:
+# Wayland Screenshot Annotator — Build Plan
 
-## Capturing the Screen
+Rough roadmap for a flameshot-style overlay tool targeting sway/Hyprland (wlroots) and GNOME/KDE, using Odin + SDL3.
 
-SDL3 doesn't have a built-in screenshot-all-displays API, but you have two good options:
+---
 
-- **`wlr-screencopy` protocol** (via `zwlr_screencopy_manager_v1`) — works on wlroots-based compositors (Sway, Hyprland, niri, etc.). You'd call this via raw Wayland protocol before initializing SDL, then load the raw pixel data into an `SDL_Texture`.
-- **`xdg-desktop-portal`** (via `org.freedesktop.portal.Screenshot`) — the "proper" Wayland way, works on GNOME, KDE, and others. More portable but may show a permission prompt.
+## Phase 0 — Validate the environment
 
-SDL3 itself doesn't abstract this — you'll handle screen capture outside SDL, then hand the pixels in.
+The goal here is to know, concretely, which protocols each target compositor advertises — don't assume, check.
 
-## Full-Span Overlay Window
+### Option A — quick check without installing anything extra
 
-SDL3 supports creating a borderless window positioned and sized to span all displays. You'd:
+Most distros ship `grim` or other wlroots-ecosystem tools, but if you don't want to install anything, write a tiny throwaway Odin (or even C) program that does the minimum Wayland client boilerplate:
 
-1. Call `SDL_GetDisplays()` to enumerate displays and get their bounds
-2. Compute the bounding union rectangle of all display geometries
-3. Create a single `SDL_Window` with `SDL_WINDOW_BORDERLESS` covering that union rect
-4. On Wayland, set it as an overlay layer via the **`wlr-layer-shell`** protocol (`zwlr_layer_shell_v1`) so it sits on top of everything — this is the same mechanism flameshot uses
+1. `wl_display_connect(nil)`
+2. Get the registry, add a `global` event listener
+3. `wl_display_roundtrip` to force the compositor to announce everything
+4. In the listener, print every `interface` string it gives you
 
-The layer-shell part requires direct Wayland protocol calls (not SDL-abstracted), but SDL3 gives you access to the underlying `wl_surface` via `SDL_GetProperty` on the window, so you can attach the layer-shell role to it.
+This is ~30 lines and reusable — you'll need this exact registry-listing logic in your real app anyway (Phase 2 onward), so it's not wasted throwaway work. Search: **"wayland client registry global listener minimal example"** if you want a skeleton to start from.
 
-## Region Selection + Drawing
+Run that program on each compositor and check the printed list for:
+- `zwlr_screencopy_manager_v1`
+- `zwlr_layer_shell_v1`
 
-This is pure SDL3 and very straightforward:
+If a name isn't in the printed list, that compositor doesn't support it. No further testing needed.
 
-- Render the captured screenshot as a background texture
-- Track mouse drag with `SDL_EVENT_MOUSE_BUTTON_DOWN/UP` and `SDL_EVENT_MOUSE_MOTION` to define the selection rect
-- Draw the selection overlay using `SDL_RenderRect` / `SDL_RenderFillRect` with a semi-transparent color
-- For annotations (arrows, boxes, text, freehand), SDL3's `SDL_RenderLine`, `SDL_RenderRect`, and `SDL_RenderGeometry` cover most of it; for text you'd bring in **SDL_ttf 3.x**
+### Option B — if you're fine installing a tool
 
-## Cropping and Output
+`wayland-utils` (provides the `wayland-info` command) does exactly the above for you:
 
-Once the user confirms:
+```bash
+sudo dnf install wayland-utils   # Fedora
+wayland-info | grep -i screencopy
+wayland-info | grep -i layer_shell
+```
 
-1. You have the selection rect in screen coordinates
-2. Read back pixels with `SDL_RenderReadPixels` from just that region
-3. Encode to PNG via **SDL_image 3.x** (`IMG_SavePNG`) or `stb_image_write` — both work fine
-4. Optionally pipe to clipboard using `SDL_SetClipboardData` with `image/png` mime type — SDL3 supports arbitrary mime types on the clipboard, so this works natively on Wayland
+Same result as Option A, less setup if you don't mind adding the package.
 
-## What You'll Need Outside SDL3
+### What to expect per compositor (so you know what you're confirming, not guessing blind)
 
-| Need | Solution |
-|---|---|
-| Screen capture | `wlr-screencopy` or `xdg-desktop-portal` |
-| Overlay positioning | `wlr-layer-shell` protocol |
-| Wayland protocol codegen | `wayland-scanner` + protocol XMLs |
-| Text rendering | SDL_ttf 3.x |
-| PNG output | SDL_image 3.x or `stb_image_write` |
+- **Sway / Hyprland** — both implement the standard wlroots protocol set, so both `zwlr_screencopy_manager_v1` and `zwlr_layer_shell_v1` should be present. Worth confirming directly anyway since versions/behavior can still differ.
+- **KDE Plasma (KWin)** — has had layer-shell support for several Plasma versions. Confirm the version on your test machine actually has it by running the check above; if you want to check without a live KDE session, search **"KWin layer-shell support changelog"** or look at `invent.kde.org/plasma/kwin` directly.
+- **GNOME (Mutter)** — does **not** support `wlr-layer-shell` natively as of current Mutter versions; this is a known, long-standing gap. The common workaround (`gtk4-layer-shell`) requires GTK as your toolkit, which doesn't apply here. Plan on a fallback (regular `xdg_toplevel` fullscreen window, no true overlay/exclusivity) for GNOME rather than expecting layer-shell to appear.
 
-## Compositor Compatibility Caveat
+### Track what you've actually confirmed
 
-The `wlr-layer-shell` + `wlr-screencopy` path works great on **wlroots compositors** (Sway, Hyprland, niri, Wayfire). On **GNOME/Mutter** and **KDE/KWin**, layer-shell support varies (GNOME is notably hostile to it), so if you want broad compatibility you'd also want an `xdg-desktop-portal` fallback path — which is more work but doable.
+| Compositor | screencopy? | layer-shell? | Fallback needed |
+|---|---|---|---|
+| Sway | | | |
+| Hyprland | | | |
+| KDE Plasma (KWin) | | | |
+| GNOME (Mutter) | | | |
 
-## Summary
+Fill this in only from machines you've actually tested — treat anything you couldn't test directly as "assumed from docs, verify later," not confirmed.
 
-The SDL3 parts (window, rendering, input, clipboard) are all solid. The two places you step outside SDL are screen capture and layer-shell overlay positioning — both require direct Wayland protocol calls, but SDL3 exposes the native handles you need to bridge them. This is exactly the architecture tools like `grim` + `slurp` use under the hood, just unified into one binary with SDL doing the rendering layer.
+---
+
+## Phase 1 — Screenshot capture (wlroots path)
+
+- Generate/obtain Odin bindings for `wlr-screencopy-unstable-v1` from the protocol XML (search: **"wayland-scanner generate bindings from protocol xml"**).
+- Implement: connect display → bind registry → find `zwlr_screencopy_manager_v1` + `wl_output`s → request `capture_output` per output → handle the buffer/buffer_done/copy/ready event sequence → end up with raw pixel buffers per monitor.
+- Reference implementation to study: `wlroots/examples/screencopy.c` (search: **"wlroots screencopy.c example github"**).
+
+## Phase 1b — Screenshot capture (portal fallback for GNOME/KDE)
+
+- Search: **"xdg-desktop-portal Screenshot D-Bus interface"** — this is the freedesktop portal method for non-wlroots compositors.
+- You'll be making a D-Bus call (search: **"Odin D-Bus bindings"** or consider shelling out to a small helper if no clean Odin D-Bus library exists yet).
+- Decide your detection logic: try binding `zwlr_screencopy_manager_v1` first; if absent, fall back to portal capture.
+
+---
+
+## Phase 2 — Wayland layer-shell surface (the overlay window)
+
+- Generate/obtain Odin bindings for `wlr-layer-shell-unstable-v1` the same way as screencopy (same `wayland-scanner` approach).
+- Steps to implement, in order:
+  1. Create a bare `wl_surface` via `wl_compositor_create_surface`.
+  2. Assign it the layer-shell role via `zwlr_layer_shell_v1_get_layer_surface` (overlay layer, one per output).
+  3. Set anchor (fill the output), exclusive zone (`-1` so panels don't push it), and keyboard interactivity (exclusive, so you can capture Esc/Enter while drawing).
+  4. Handle the `configure` event and call `ack_configure` — nothing renders until this handshake completes (search: **"wlr-layer-shell configure ack_configure handshake"** if the event ordering is confusing).
+  5. `wl_surface_commit`.
+- Reference: search **"wlr-layer-shell-unstable-v1 protocol xml"** for the full request/event spec, and look for any minimal "layer-shell hello world" client examples (search: **"wlr layer shell example client c"**).
+
+---
+
+## Phase 3 — EGL context on the layer-shell surface
+
+- Create a `wl_egl_window` wrapping your `wl_surface` (search: **"wl_egl_window_create example"**).
+- Standard EGL bring-up against it: `eglGetDisplay` → `eglInitialize` → `eglBindAPI` → `eglChooseConfig` → `eglCreateContext` → `eglCreateWindowSurface` → `eglMakeCurrent`.
+- This part is generic EGL-on-Wayland, not wlr-specific — search: **"EGL wayland window surface setup tutorial"** if you want a deeper walkthrough than the official EGL registry docs.
+- At the end of this phase you should be able to `glClear` to a solid color and see it appear in your overlay, with zero SDL/raylib involved yet. Validate this before moving on — it isolates whether problems later are Wayland/EGL issues or SDL issues.
+
+---
+
+## Phase 4 — Attach SDL3 rendering to your existing context
+
+- Look into SDL3's properties API for pulling native Wayland handles off an SDL-created window (search: **"SDL3 SDL_PROP_WINDOW_WAYLAND properties"**) — useful for understanding what SDL normally manages internally, even though you're bypassing window creation.
+- Since SDL3 doesn't have an official "adopt an existing native surface with an already-assigned role" path, your approach is to skip `SDL_CreateWindow` and instead get SDL's GL/renderer layer working against the context you made manually in Phase 3 (search: **"SDL3 create renderer from existing OpenGL context"** and **"SDL3 custom window backend"** — this is a less common usage pattern so expect to piece it together from SDL's GitHub issues/discussions rather than a single tutorial).
+- Drive your own render loop instead of SDL's normal frame timing, since there's no SDL-managed window driving it.
+
+---
+
+## Phase 5 — Frame callback loop
+
+- Implement a `wl_surface_frame` callback loop: request a frame callback → render your frame → `eglSwapBuffers` → request the next callback (search: **"wl_surface_frame callback render loop wayland"**).
+- This replaces SDL's normal event/frame loop, since you're driving Wayland directly.
+
+---
+
+## Phase 6 — Compositing the screenshot + draw the overlay UI
+
+- Upload your captured pixel buffers (from Phase 1) as textures.
+- Draw them full-screen per monitor as your background layer.
+- Build your annotation tools on top (selection rect, arrows, text, etc.) using SDL3's rendering calls — this part has no Wayland-specific concerns, it's just normal 2D rendering logic.
+
+---
+
+## Phase 7 — Clipboard
+
+- Implement `wl_data_device_manager`-based clipboard writing, or just shell out to `wl-copy` for v1 to de-risk this step (search: **"wl_data_device clipboard write image wayland"** if doing it natively, or **"wl-copy usage"** if shelling out).
+
+---
+
+## Suggested order of attack
+
+1. Get Phase 0 confirmed on your actual machine/compositor.
+2. Phase 1 (screencopy) and Phase 2+3 (layer-shell + EGL, rendering a solid color) can be built in parallel as two independent proof-of-concepts.
+3. Only after both POCs work independently, tackle Phase 4 (wiring SDL3 into the existing context) — this is the fragile, least-documented step, so isolate it last.
+4. Phase 1b (portal fallback) can come after the wlroots path is fully working — it's a separate code path you can bolt on once the core app works on sway/Hyprland.

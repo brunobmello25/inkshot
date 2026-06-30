@@ -2,6 +2,7 @@ package inkshot
 
 import "core:c"
 import "core:log"
+import wl "lib:odin-wayland"
 import sdl "vendor:sdl3"
 
 main :: proc() {
@@ -14,6 +15,10 @@ main :: proc() {
 	bounds_x, bounds_y, ok := get_overlay_bounds()
 
 	log.debugf("Overlay bounds: x=%d, y=%d, ok=%v", bounds_x, bounds_y, ok)
+
+
+	display := wl.display_connect(nil)
+	if display == nil {}
 }
 
 get_overlay_bounds :: proc() -> ([2]int, [2]int, bool) {
