@@ -1,9 +1,13 @@
-#include "../base/base_core.h"
 #include <stdio.h>
 #include <string.h>
+#include <wayland-client-protocol.h>
 #include <wayland-client.h>
 
+#include "../base/base_core.h"
+#include "../os/generated/xdg-shell-client-protocol.h"
+
 #include "../base/base_arena.c"
+#include "../os/generated/xdg-shell-client-protocol.c"
 #include "../os/os_core_linux.c"
 
 #define MAX_OUTPUTS 8
@@ -22,6 +26,9 @@ typedef struct {
   struct wl_registry *registry;
   Output_Info outputs[MAX_OUTPUTS];
   i32 output_count;
+  struct wl_compositor *compositor;
+  struct xdg_wm_base *wm_base;
+  struct wl_shm *shm;
 } State;
 
 static void output_geometry(void *data, struct wl_output *wl_output, i32 x,
@@ -83,12 +90,27 @@ static void registry_global(void *data, struct wl_registry *registry, u32 name,
       fprintf(stderr, "too many outputs, skipping\n");
       return;
     }
-    Output_Info *out = &state->outputs[state->output_count];
+
+    Output_Info *out = &state->outputs[state->output_count++];
     out->scale = 1;
     out->wl_output = wl_registry_bind(registry, name, &wl_output_interface,
                                       version < 4 ? version : 4);
     wl_output_add_listener(out->wl_output, &output_listener, out);
-    state->output_count++;
+  }
+
+  if (strcmp(interface, wl_compositor_interface.name) == 0) {
+    state->compositor = wl_registry_bind(
+        registry, name, &wl_compositor_interface, version < 4 ? version : 4);
+  }
+
+  if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
+    state->wm_base = wl_registry_bind(registry, name, &xdg_wm_base_interface,
+                                      version < 4 ? version : 4);
+  }
+
+  if (strcmp(interface, wl_shm_interface.name) == 0) {
+    state->shm = wl_registry_bind(registry, name, &wl_shm_interface,
+                                  version < 4 ? version : 4);
   }
 }
 
@@ -125,9 +147,12 @@ int main(void) {
   for (i32 i = 0; i < state.output_count; i++) {
     Output_Info *out = &state.outputs[i];
     printf("  %s\n", out->name[0] ? out->name : "(unnamed)");
-    printf("    position : %d,%d\n", out->x, out->y);
+    printf("    position  : %d,%d\n", out->x, out->y);
     printf("    resolution: %dx%d\n", out->width, out->height);
-    printf("    scale    : %d\n", out->scale);
+    printf("    scale     : %d\n", out->scale);
+    printf("    compositor: %p\n", (void *)state.compositor);
+    printf("    wm_base   : %p\n", (void *)state.wm_base);
+    printf("    wl_shm    : %p\n", (void *)state.shm);
     printf("\n");
   }
 
