@@ -1,4 +1,4 @@
-#ifndef BASE_DEFINES_H
+#ifndef BASE_CORE_H
 
 /*
  * NOTE:
@@ -11,8 +11,6 @@
  * allocation addresses, etc
  */
 
-#include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 
 typedef uint8_t u8;
@@ -25,6 +23,10 @@ typedef int32_t i32;
 typedef int64_t i64;
 typedef float f32;
 typedef double f64;
+typedef i32 b32;
+
+#define true 1
+#define false 0
 
 #define local_persist static
 #define global_variable static
@@ -49,5 +51,5 @@ typedef double f64;
 #define ASSERT(expression)
 #endif
 
-#define BASE_DEFINES_H
+#define BASE_CORE_H
 #endif

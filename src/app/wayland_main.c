@@ -1,4 +1,4 @@
-#include "base.h"
+#include "../base/base_core.h"
 #include <stdio.h>
 #include <string.h>
 #include <wayland-client.h>
@@ -11,7 +11,7 @@ typedef struct {
   i32 width, height;
   i32 scale;
   char name[64];
-  bool done;
+  b32 done;
 } Output_Info;
 
 typedef struct {
