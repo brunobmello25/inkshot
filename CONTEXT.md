@@ -8,89 +8,102 @@ next step). Last updated: 2026-08-24
 
 ## What This Is
 
-Wayland-native Flameshot replacement, written in C. Freeze-and-select architecture:
-capture all outputs → overlay frozen captures via layer-shell → user selects region →
-annotate → copy to clipboard.
+Wayland-native Flameshot replacement, written in C. Freeze-and-select: capture screen →
+show frozen image fullscreen → select region → annotate → clipboard.
 
 ## Working Rules (MUST follow)
 
-1. **NEVER write code for the user.** Guide only — explain concepts, point to protocols/
-   docs, describe approaches, review their code when asked. The user writes all code.
-2. **Unity build system.** All `.c` files are `#include`d into one translation unit
-   (see `src/app/wayland_main.c` including `base_arena.c`, `os_core_linux.c`). New `.c`
-   files get included the same way, not compiled separately.
-3. **Arena allocators for everything.** No malloc/free scattered around. Use the Arena
-   API from `src/base/base_arena.h` (`ArenaAlloc`, `PushArray`, `PushStruct`,
-   `TempBegin`/`TempEnd`, ...). Wayland/shell resources that need explicit destroy calls
-   are fine, but any data allocation goes through arenas.
-4. Code style: PascalCase types/functions (`Output_Info`, `State`), lowercase
-   snake_case fields, no comments unless necessary.
-5. Build with `bin/build.sh` (GCC), output to `data/inkshot` currently — eventually
-   `target/inkshot`.
+1. **NEVER write code for the user.** Guide only — explain concepts, point to protocols,
+   describe approaches, review their code when asked. User writes all code.
+2. **Unity build system.** All `.c` files `#include`d into one translation unit (see
+   `src/app/wayland_main.c`). New `.c` files get included the same way.
+3. **Arena allocators for everything** (`src/base/base_arena.h`: `ArenaAlloc`,
+   `PushArray`, `PushStruct`, `TempBegin/End`). No malloc/free for app data.
+4. Style: PascalCase types (`Output_Info`), snake_case fields, minimal comments.
+5. Build: `bin/build.sh` (GCC + pkg-config), output `data/inkshot`.
+6. Be terse in answers — user dislikes verbosity.
+
+## Architecture Strategy (decided 2026-08-24)
+
+**Single universal codepath via plain `xdg_shell` — NOT wlr-layer-shell.**
+
+Primary target is user's **work laptop running GNOME Wayland (GNOME 42.9)**.
+
+Why not layer-shell: Mutter has never implemented `wlr-layer-shell` and refuses to
+(gnome-shell#1141). Verified July 2026: still the holdout. Layer-shell overlay is
+impossible on GNOME; may be added later as optional enhancement for Hyprland/sway.
+
+Why not XWayland/X11: under Wayland, X11 clients cannot read native window pixels nor
+stack above them — dead end (that's why Flameshot breaks on Wayland).
+
+### Pipeline
+
+1. **Capture**: D-Bus call to `org.freedesktop.portal.Screenshot` → compositor writes
+   PNG to disk, returns URI → load pixels into memory.
+   - Open question: on GNOME 42 portal may prompt; fallback = private
+     `org.gnome.Shell.Screenshot` D-Bus API (test when we get there).
+2. **Windows**: one `wl_surface` per output → `xdg_wm_base_get_xdg_surface` →
+   `xdg_surface_get_toplevel` → `xdg_toplevel_set_fullscreen(output)`.
+   Borderless, covers exactly that monitor. One window per display.
+3. **Render**: PNG pixels into memfd/mmap buffer → `wl_shm` pool/buffer → attach+commit.
+   Later: upload as GLES texture via EGL for hardware-accelerated drawing tools.
+4. **Selection**: drag rectangle across displays. Pointer events are surface-local;
+   convert with `global = output.x + local_x`. Selection rect lives in global State
+   (NOT per-window — pointer leave/enter mid-drag must not reset it). Bright inside,
+   dimmed outside; each window renders its slice.
+5. **Annotate**: lines/arrows/rectangles on frozen image (GLES once EGL lands).
+6. **Finish**: Enter → crop region → PNG → clipboard.
+
+### Multi-display coordinates
+
+- `xdg-output-manager` protocol required: mutter reported all outputs at 0,0 via plain
+  `wl_output.geometry`; xdg-output gives true logical positions (must verify).
+- Mixed scales (eDP-1 scale=2): mind `wl_surface.set_buffer_scale`, physical vs logical.
+
+## Environment Facts
+
+- This machine: Ubuntu, GNOME Shell 42.9, currently in **X11 session** — must log into
+  "Ubuntu on Wayland" session to test anything.
+- Installed: wayland-scanner ✓, libwayland-dev ✓ (wayland-client.pc), EGL/GLES ✓.
+  Missing: libcairo2-dev, wlr-protocols package. wayland-protocols v1.25 (old but has
+  stable xdg-shell XML at `/usr/share/wayland-protocols/stable/xdg-shell/`).
+- Mutter 49+ supports `ext-image-copy-capture-v1` (direct capture, no portal) — this
+  machine's GNOME 42 does not. Revisit if laptop upgrades past GNOME 49.
 
 ## Tech Stack
 
-- C (not Rust), GCC via `bin/build.sh`
-- `libwayland-client` directly (like slurp/grim) — no toolkit
-- Cairo planned for rendering; xkbcommon for keyboard
-- Protocol bindings generated with `wayland-scanner` from XML
-- Docs: `docs/wayland-area-selection.md` (full research doc),
-  `docs/wayland-book/` submodule (The Wayland Book)
+- C (not Rust), GCC, unity builds, arenas
+- `libwayland-client` directly (no toolkit); xdg-shell now, EGL/GLES later
+- D-Bus for portal (GIO available via pkg-config if needed)
+- xkbcommon for keyboard (Escape/Enter)
+- Docs: `docs/wayland-area-selection.md` (research; NOTE: its layer-shell
+  recommendation is superseded by this strategy), `docs/wayland-book/` submodule
 
-## Roadmap (in order)
+## Roadmap
 
-1. ~~Display enumeration~~ — DONE (see Status below)
-2. Borderless/barless overlay window positioned to cover all displays correctly
-   (wlr-layer-shell, OVERLAY layer, one surface per output)
-3. Graphics context with hardware acceleration for drawing
-4. Screenshot current display state (wlr-screencopy) and render it inside the window
-5. Rectangular mouse selection, flameshot-style (bright inside region, dimmed outside)
-6. Annotation tools: lines, arrows, rectangles (+ controls)
-7. On Enter: encode final image + drawings, store on clipboard
+1. ~~Display enumeration~~ DONE (predates CONTEXT.md; code in `src/app/wayland_main.c`)
+2. Borderless fullscreen `xdg_toplevel` per display + solid-color shm render
+3. Real capture: portal screenshot → render image in windows
+4. Rectangular selection across displays (global coords, dim outside)
+5. Annotation tools (lines/arrows/rects) — decide EGL vs software here
+6. Clipboard copy of final composited image on Enter
 
 ## Current Status
 
-### Step 1: Display Enumeration — DONE
-
-`src/app/wayland_main.c` connects to compositor, binds all `wl_output` globals (v4 for
-the `name` event), prints name/position/resolution/scale, cleans up.
-
-Machine's actual outputs (all report position 0,0 — compositor quirk to handle later):
-
-| Name       | Resolution | Scale | Notes            |
-|------------|-----------|-------|------------------|
-| `eDP-1`    | 1920x1200 | 2     | laptop, 16:10    |
-| `DP-3`     | 1920x1080 | 1     | FHD 16:9         |
-| `HDMI-A-1` | 3440x1440 | 1     | ultrawide WQHD   |
-
-Key learnings:
-- Two `wl_display_roundtrip`s needed: first discovers/binds globals, second receives
-  output events. One-shot pattern, no event loop yet.
-- Mixed scale factors (2 vs 1) across outputs = mixed DPI problem deferred until after
-  basic pipeline works.
-
-### Next Step: Step 2 — Layer-Shell Overlay Window
-
-Open borderless fullscreen windows covering each output via
-`zwlr_layer_shell_unstable_v1`:
-- Bind layer_shell + compositor + seat globals from registry
-- Per output: `wl_surface` → `get_layer_surface` (layer `OVERLAY`, anchor all edges,
-  exclusive zone `-1`)
-- Keyboard interactivity `exclusive` (needed later for Escape/Enter)
-- Need an event loop now (`wl_display_dispatch` / `wl_display_get_fd` + poll)
-- First render can be a solid color buffer via `wl_shm` to prove positioning works;
-  wl_buffer attach + commit, wait for frame callbacks
-
-Questions to resolve during Step 2:
-- Hardware acceleration choice for step 3: OpenGL ES via EGL on wl_surface vs software
-  Cairo on shm buffers (cairo-gl possible). Decide after basic overlay works.
+Step 2 not started. Plan agreed:
+- A: generate xdg-shell bindings (wayland-scanner client-header + private-code),
+  extend build.sh; bind `wl_compositor`, `xdg_wm_base`, `wl_shm` (+ xdg-output-manager)
+- B: replace roundtrips with dispatch loop + SIGINT exit flag (watch EINTR)
+- C: configure dance: commit bare surface → wait configure → ack_configure → THEN
+  attach buffer. Also ping→pong or compositor kills us. Fullscreen(toplevel, output).
+- D: solid color per display (distinct colors) via memfd→shm pool→XRGB8888 buffer
+- E: verify coverage/no decorations/clean teardown
 
 ## Gotchas & Decisions Log
 
-- Compositor reports all output positions as 0,0 → unified bounding-box math must not
-  assume real positions; may need `xdg-output-manager` (zwlr layer doesn't fix logical
-  layout) or accept overlap behavior as-is initially.
-- `wlr-screencopy-unstable-v1` chosen over portal/ext-image-copy-capture (broadest
-  support on wlroots compositors; see research doc for tradeoffs).
-- Multi-monitor plan: one layer surface per output; selection coords in logical space;
-  unified bounding-box capture buffer with black-filled gaps.
+- Configure-before-attach ordering is mandatory (protocol error otherwise).
+- First commit must be empty (no buffer) to trigger initial configure.
+- Selection state global, never per-window (mid-drag pointer handoff between windows).
+- All-zeros output positions from wl_output on GNOME → use xdg-output-manager.
+- Portal XMLs: xdg-shell from system wayland-protocols; nothing needs vendoring yet
+  (no layer-shell/screencopy in this architecture).
