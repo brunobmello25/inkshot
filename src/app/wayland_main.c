@@ -3,6 +3,9 @@
 #include <string.h>
 #include <wayland-client.h>
 
+#include "../base/base_arena.c"
+#include "../os/os_core_linux.c"
+
 #define MAX_OUTPUTS 8
 
 typedef struct {

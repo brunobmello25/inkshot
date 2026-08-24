@@ -12,6 +12,7 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -43,13 +44,19 @@ typedef i32 b32;
   ((value < min) ? min : (value > max) ? max : value)
 
 #if BUILD_SLOW
-#define ASSERT(expression)                                                     \
+#define Assert(expression)                                                     \
   if (!(expression)) {                                                         \
     *(volatile int *)0 = 0;                                                    \
   }
 #else
 #define ASSERT(expression)
 #endif
+
+#define AlignPow2(x, b) (((x) + (b) - 1) & ~((b) - 1))
+
+#define MemorySet(dst, value, size) memset((dst), (value), (size))
+#define MemoryZero(dst, size) memset((dst), 0, (size))
+#define MemoryCopy(dst, src, size) memcpy((dst), (src), (size))
 
 #define BASE_CORE_H
 #endif
