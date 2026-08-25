@@ -3,8 +3,11 @@
 mkdir -p data
 pushd ./data
 
-wayland-scanner client-header /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml ../src/os/generated/xdg-shell-client-protocol.h
-wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml ../src/os/generated/xdg-shell-client-protocol.c
+wayland-scanner client-header ../protocols/xdg-shell.xml ../src/os/generated/xdg-shell-client-protocol.h
+wayland-scanner private-code ../protocols/xdg-shell.xml ../src/os/generated/xdg-shell-client-protocol.c
+
+wayland-scanner client-header ../protocols/wlr-screencopy-unstable-v1.xml ../src/os/generated/wlr-screen-copy.h
+wayland-scanner client-header ../protocols/wlr-screencopy-unstable-v1.xml ../src/os/generated/wlr-screen-copy.c
 
 gcc $(realpath ../src/app/wayland_main.c) -o inkshot \
     -DBUILD_SLOW=1 \
