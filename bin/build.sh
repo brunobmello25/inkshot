@@ -12,7 +12,7 @@ wayland-scanner private-code ../protocols/wlr-screencopy-unstable-v1.xml ../src/
 wayland-scanner client-header ../protocols/wlr-layer-shell-unstable-v1.xml ../src/app/generated/wlr-layer-shell.h
 wayland-scanner private-code ../protocols/wlr-layer-shell-unstable-v1.xml ../src/app/generated/wlr-layer-shell.c
 
-gcc $(realpath ../src/app/wayland_main.c) -o inkshot \
+gcc $(realpath ../src/app/wayland_main.c) -g -o inkshot \
     -DBUILD_SLOW=1 \
     $(pkg-config --cflags --libs wayland-client)
 
